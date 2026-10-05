@@ -69,11 +69,19 @@ together:
 - ✅ Typed exception hierarchy for every failure mode
 - ✅ CSV loader with configurable, project-root-derived paths — no network access
 - ✅ Read-only validation producing a typed data-quality report
-- ✅ Test suite for the foundation and the data layer
+
+**Stage 3 — preprocessing pipeline: complete.**
+
+- ✅ Zero-sentinel handling: `0 → NaN` in the five documented columns
+- ✅ Median imputation, fitted on the training partition only
+- ✅ Model-appropriate scaling — standardise for linear, omit for trees
+- ✅ Stratified, deterministic, configurable train/test split
+- ✅ Single fitted pipeline reused for training, testing and one-patient inference
+- ✅ Optional joblib serialisation of the fitted preprocessor
+- ✅ Leakage prevention asserted by test, not just by convention
 
 **Not started.**
 
-- ⬜ Preprocessing pipeline (including the explicit decision on zero sentinels)
 - ⬜ Model training and evaluation
 - ⬜ SHAP / LIME explainers
 - ⬜ FastAPI service
@@ -124,12 +132,13 @@ cronical/
 ├── src/cronical/             # The installable library.
 │   ├── __init__.py           # Version, disclaimer constants, package contract.
 │   ├── config.py             # Settings + derived Paths. The only source of paths.
-│   ├── data/                 # Ingestion, schema validation, preprocessing.
+│   ├── data/                 # Ingestion, validation, preprocessing.
 │   │   ├── schema.py         # The column contract, incl. the zero-sentinel rule.
 │   │   ├── errors.py         # Typed exception hierarchy.
 │   │   ├── loader.py         # CSV loading. No network access.
 │   │   ├── validation.py     # Read-only checks.
-│   │   └── report.py         # Typed data-quality report structures.
+│   │   ├── report.py         # Typed data-quality report structures.
+│   │   └── preprocessing.py  # Leakage-safe feature pipeline, train/test split.
 │   ├── models/               # Feature pipelines, estimators, training, evaluation.
 │   ├── explainability/       # SHAP and LIME. Reads artifacts; never trains.
 │   ├── clinical/             # Clinician-facing rendering. The safety boundary.
@@ -219,9 +228,10 @@ CRONICAL_PROJECT_ROOT=/srv    # -> Settings.project_root, and therefore every pa
 
 ## 3. Planned ML pipeline
 
-**Status: partially implemented.** Stages 3.1–3.4 (raw → validation) are complete.
-Preprocessing, splitting, training and evaluation are not, and are documented
-below as the design contract the implementation will be held to.
+**Status: partially implemented.** Stages 3.1–3.6 (raw → validation →
+preprocessing → leakage-safe split) are complete. Model training, evaluation and
+everything downstream of them are not, and are documented below as the design
+contract the implementation will be held to.
 
 ### 3.1 The three stages
 
@@ -247,15 +257,33 @@ quietly do another's.
                │  DataQualityReport
                ▼
    ┌─────────────────────────┐
-   │  PREPROCESSING          │  ⬜ NOT IMPLEMENTED
-   │  (future stage)         │  · explicit decision on zero sentinels
-   │  writes to data/        │    (impute / drop / model)
-   │  processed/             │  · imputation stats stored in artifact
+   │  SENTINEL ZERO HANDLING │  SentinelZeroHandler
+   │  0 → NaN, five columns  │  · Glucose, BloodPressure,
+   │  only                   │    SkinThickness, Insulin, BMI
+   │  raw file untouched     │  · Pregnancies 0 is a real value
+   └───────────┬─────────────┘
+               ▼
+   ┌─────────────────────────┐
+   │  MEDIAN IMPUTATION      │  SimpleImputer(strategy="median")
+   │  fitted on TRAIN only   │  · medians learned from training rows
+   │  keeps feature count    │  · statistics inside the pipeline
+   └───────────┬─────────────┘
+               ▼
+   ┌─────────────────────────┐
+   │  MODEL-SPECIFIC SCALING │  StandardScaler, or omitted
+   │  linear → standardise   │  · tree ensembles: no scaling
+   │  tree   → no scaling    │  · one flag, everything else shared
+   └───────────┬─────────────┘
+               │  fitted Pipeline (reused at inference)
+               ▼
+   ┌─────────────────────────┐
+   │  MODEL TRAINING         │  ⬜ NOT IMPLEMENTED
    └─────────────────────────┘
 ```
 
 **Nothing crosses a stage boundary silently.** Raw is never written; validation
-never repairs; the loader never coerces.
+never repairs; the loader never coerces; preprocessing never edits the raw file
+and never sees the target.
 
 ### 3.2 Dataset, source and provenance
 
@@ -361,26 +389,159 @@ distribution, and every error and warning with stable issue codes. Every figure 
 computed from the dataset actually inspected — nothing is defaulted or carried
 over.
 
-### 3.5 Preprocessing — not implemented
+### 3.5 Preprocessing — implemented
 
-A single deterministic entry point, fitted on the training split only:
+`cronical.data.preprocessing` builds an ordinary scikit-learn `Pipeline`, so the
+*same fitted object* serves training, cross-validation, testing and
+single-patient inference. Steps, in order:
 
-- An **explicit, recorded decision** on zero-sentinel values: impute, drop, or
-  model the missingness. This is the first thing that stage must settle.
-- Missing-value handling, with imputation statistics stored in the artifact.
-- Scaling where the estimator requires it.
-- No silent feature engineering whose effect cannot be explained later.
+| # | Step | Class | Learns |
+| --- | --- | --- | --- |
+| 1 | Contract | `FeatureContract` | nothing; validates and fixes column order |
+| 2 | Sentinel zeros | `SentinelZeroHandler` | nothing; `0 → NaN` in five columns |
+| 3 | Imputation | `SimpleImputer(strategy="median")` | per-feature medians |
+| 4 | Scaling *(optional)* | `StandardScaler` | per-feature mean and scale |
 
-Outputs land in `data/processed/`, never back in `data/raw/`.
+#### Why zero sentinels become missing
 
-### 3.6 Splitting and leakage control
+`Glucose`, `BloodPressure`, `SkinThickness`, `Insulin` and `BMI` use `0` to mean
+**"this measurement was not recorded"**. Nobody's blood pressure is zero, so a
+recorded zero is a placeholder for absent data.
 
-- One deterministic split, created once and reused for every experiment.
-- Stratified splitting when the outcome is imbalanced.
-- **All transforms fitted inside the pipeline**, so cross-validation cannot leak
-  information from the validation fold.
-- If temporal data is used, split chronologically. A random split on
-  time-ordered clinical data leaks the future into the past.
+Left as a number, the pipeline would learn that "zero glucose" is a very low
+value — quietly treating a missing measurement as an extreme observation, and
+pulling the fitted median and scale towards it. Converting to `NaN` first and
+imputing afterwards means every derived statistic comes from measurements that
+were actually taken.
+
+`Pregnancies` is deliberately excluded: a pregnancy count of zero is a real
+observation, not a placeholder. `Outcome` never enters the pipeline at all.
+
+#### Why median imputation
+
+Missing measurements are unlikely to be missing at random — they may be absent
+precisely because they were hard to obtain. The median sits in the middle of the
+observed distribution and, unlike the mean, is not dragged around by a few
+unusually large readings. It also does not manufacture a value outside the range
+that was recorded.
+
+Preferred over iterative or model-based imputation because it introduces no
+second fitted model that would need its own validation.
+
+> This is a **conservative default, not a claim that it is optimal.** Whether
+> these rows should instead be dropped, or whether the missingness should be
+> modelled explicitly as a feature, remains an open modelling decision. It is
+> not settled by this code.
+
+#### Why scaling differs by model family
+
+| Model family | Scaling | Reason |
+| --- | --- | --- |
+| Logistic regression, other linear | `StandardScaler` | A coefficient is fitted per feature, so features measured on wildly different scales would dominate purely because of their units. |
+| Random forest, XGBoost, other trees | none | Trees split on thresholds; only the *ordering* of values matters, so rescaling changes nothing while adding fitted parameters and a serialisation dependency. |
+
+The choice is one explicit flag (`ScalingMode`). Both paths share every other
+step, so the difference is genuinely a single step and the two cannot drift apart.
+
+#### Public API
+
+| Function | Purpose |
+| --- | --- |
+| `build_preprocessor()` | Assemble an unfitted pipeline |
+| `build_training_pipeline(estimator)` | Preprocessing plus an estimator |
+| `fit_preprocessor(X_train)` | Fit on the **training partition only** |
+| `transform_features(pipeline, X)` | Transform a batch |
+| `transform_patient(pipeline, record)` | Transform one record at inference |
+| `split_dataset(frame)` | Stratified train/test split |
+| `describe_preprocessor(pipeline)` | Audit trail of what was fitted |
+| `save_preprocessor()` / `load_preprocessor()` | Persist and reuse the fitted pipeline |
+| `dump_preprocessor()` | Write a JSON description for a report |
+
+#### Reuse at inference
+
+`transform_patient(pipeline, record)` runs one record through the *already fitted*
+pipeline. Nothing is refitted, so inference sees exactly the transformations the
+model was trained on:
+
+```python
+from cronical.data.loader import load_dataset
+from cronical.data.preprocessing import fit_preprocessor, split_dataset, transform_patient
+
+split = split_dataset(load_dataset())
+pipeline = fit_preprocessor(split.X_train)  # fitted once, on training data
+
+row = transform_patient(
+    pipeline,
+    {
+        "Pregnancies": 2,
+        "Glucose": 0,
+        "BloodPressure": 70,
+        "SkinThickness": 25,
+        "Insulin": 120,
+        "BMI": 28.0,
+        "DiabetesPedigreeFunction": 0.45,
+        "Age": 38,
+    },
+)
+```
+
+That `Glucose` of `0` is treated as an unrecorded measurement and filled with the
+training median — never passed through as a real value.
+
+### 3.6 Splitting and leakage control — implemented
+
+`split_dataset(frame)` returns a `DatasetSplit` holding `X_train`, `X_test`,
+`y_train`, `y_test`. It validates the dataset first, so a missing column or a
+non-binary outcome stops the split before anything is produced.
+
+| Property | Behaviour |
+| --- | --- |
+| Deterministic | Seeded; `CRONICAL_RANDOM_SEED` by default, overridable per call |
+| Stratified | Outcome balance preserved in both partitions, never optional |
+| Configurable | `test_size` from settings or per call |
+| Auditable | Row indices preserved, so any transformed row traces back to its source |
+| Guarded | A class too rare to appear in both partitions raises `SplitError` |
+
+#### Why statistics must be fitted on training data only
+
+Any statistic learned from data — a median, a mean, a scale — carries information
+about **every row it saw**. If the test partition contributes to those statistics,
+the model is indirectly exposed to the answers it will be scored against, and the
+reported metrics are optimistic for reasons that have nothing to do with
+predictive skill. The effect is small but real, and it is worst for exactly the
+high-dimensional, small-sample case this dataset represents.
+
+Three mechanisms enforce the separation:
+
+1. `split_dataset()` partitions before any fitting happens.
+2. `fit_preprocessor()` is handed the training partition only, and holds no
+   reference to the test data.
+3. All transforms live **inside** the scikit-learn pipeline, so cross-validation
+   refits them per fold and cannot leak the validation fold into the fit.
+
+The tests assert this directly, against a dataset whose training median and
+whole-dataset median differ measurably:
+
+```text
+training median of Glucose   105.0
+whole-dataset median         110.0
+fitted statistic             105.0   ← training only
+```
+
+The same check is applied to the scaler's fitted mean. A regression that fitted on
+everything would show `110.0` and fail the test.
+
+One further guarantee: `fit_preprocessor` accepts `y_train` for symmetry with
+scikit-learn, but **the target is never used to fit anything**. A test asserts
+that passing it changes no statistic.
+
+#### Not yet handled
+
+- Temporal splitting. This dataset is not time-ordered, so a random split is
+  appropriate here; if temporal data were used, a random split would leak the
+  future into the past.
+- No grouping by patient. The dataset has one row per record, so there is nothing
+  to group by — but a dataset with repeated visits would need it.
 
 ### 3.7 Model progression
 
@@ -719,6 +880,79 @@ else:
 Neither function modifies anything. The frame is returned exactly as parsed, and
 validation only reads — zero-sentinel values are reported, never imputed.
 
+### Using the preprocessing layer
+
+Each snippet below is self-contained and can be run on its own.
+
+```python
+from cronical.config import ScalingMode
+from cronical.data.loader import load_dataset
+from cronical.data.preprocessing import fit_preprocessor, split_dataset, transform_features
+
+frame = load_dataset()  # data/raw/diabetes.csv
+split = split_dataset(frame)  # stratified, seeded
+
+# Linear model: standardise.  Tree ensemble: pass ScalingMode.NONE instead.
+pipeline = fit_preprocessor(split.X_train, scaling=ScalingMode.STANDARD)
+
+features = transform_features(pipeline, split.X_test)
+```
+
+Fit **once**, on the training partition, then reuse that same fitted object for
+evaluation and for inference:
+
+```python
+from cronical.config import ScalingMode
+from cronical.data.loader import load_dataset
+from cronical.data.preprocessing import (
+    describe_preprocessor,
+    fit_preprocessor,
+    split_dataset,
+    transform_patient,
+)
+
+split = split_dataset(load_dataset())
+pipeline = fit_preprocessor(split.X_train, scaling=ScalingMode.STANDARD)
+
+row = transform_patient(
+    pipeline,
+    {
+        "Pregnancies": 2,
+        "Glucose": 0,
+        "BloodPressure": 70,
+        "SkinThickness": 25,
+        "Insulin": 120,
+        "BMI": 28.0,
+        "DiabetesPedigreeFunction": 0.45,
+        "Age": 38,
+    },
+)
+
+# That Glucose of 0 was treated as an unrecorded measurement, not a real value.
+describe_preprocessor(pipeline)  # audit trail: fitted medians, scaling, column order
+```
+
+`describe_preprocessor()` returns exactly what was learned, so a run can be
+audited and reproduced. Nothing is recomputed from data at report time.
+
+To persist the fitted pipeline and reuse it in a later process:
+
+```python
+from cronical.data.loader import load_dataset
+from cronical.data.preprocessing import (
+    fit_preprocessor,
+    load_preprocessor,
+    save_preprocessor,
+    split_dataset,
+)
+
+split = split_dataset(load_dataset())
+pipeline = fit_preprocessor(split.X_train)
+
+save_preprocessor(pipeline)  # writes models/preprocessor.joblib
+pipeline = load_preprocessor()  # reuses the same transformations
+```
+
 ### Environment variables
 
 | Variable | Default | Purpose |
@@ -735,6 +969,10 @@ validation only reads — zero-sentinel values are reported, never imputed.
 | `CRONICAL_LOG__DATE_FORMAT` | ISO 8601 | Timestamp format. |
 | `CRONICAL_LOG__TEXT_TEMPLATE` | `%(asctime)s \| %(levelname)-8s \| …` | `logging` format string used when `FORMAT=text`. |
 | `CRONICAL_LOG__PROPAGATE` | `false` | Forward records to the interpreter-wide root logger. Leave `false` to avoid duplicate output. |
+| `CRONICAL_PREPROCESSING__IMPUTATION_STRATEGY` | `median` | One of `median`, `mean`, `most_frequent`, `constant`. |
+| `CRONICAL_PREPROCESSING__DEFAULT_SCALING` | `standard` | `standard` for linear models, `none` for tree ensembles. |
+| `CRONICAL_PREPROCESSING__TEST_SIZE` | `0.2` | Fraction held out by `split_dataset()`. |
+| `CRONICAL_PREPROCESSING__ARTIFACT_NAME` | `preprocessor.joblib` | Filename for the fitted preprocessor under `models/`. |
 | `CRONICAL_API_HOST` | `127.0.0.1` | API bind address. |
 | `CRONICAL_API_PORT` | `8000` | API port. |
 | `CRONICAL_API_RELOAD` | `true` | Auto-reload for local development. |

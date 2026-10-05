@@ -48,12 +48,18 @@ data = [
     "pandas>=2.2",
     "scipy>=1.11",
 ]
-# Estimators, serialisation and imbalance handling.
-ml = [
+# Leakage-safe feature preparation. Needed by anything that consumes features,
+# so it is separate from `data` (which only reads and validates).
+preprocessing = [
     "scikit-learn>=1.5",
+    "joblib>=1.4",
+]
+# Estimators and imbalance handling. Includes preprocessing, because a model is
+# meaningless without the fitted pipeline that prepared its training features.
+ml = [
+    "cronical[preprocessing]",
     "imbalanced-learn>=0.12",
     "xgboost>=2.0",
-    "joblib>=1.4",
 ]
 # Post-hoc explanation engines.
 explainability = [
@@ -80,11 +86,14 @@ notebooks = [
     "seaborn>=0.13",
 ]
 dev = [
-    "cronical[data]",
+    "cronical[data,preprocessing]",
     "pytest>=8.2",
     "pytest-cov>=5.0",
     "ruff>=0.6",
     "mypy>=1.11",
+    # scikit-learn ships no py.typed marker, so mypy --strict needs the
+    # community stubs to type-check code that constructs its estimators.
+    "scikit-learn-stubs>=0.0.3",
     "pre-commit>=3.8",
 ]
 all = [
@@ -191,6 +200,11 @@ ignore = [
     "ARG002",
 ]
 "notebooks/*" = ["D", "ANN", "E402", "B008", "ARG"]
+# scikit-learn's API mandates these names: it inspects the signatures of `fit`,
+# `transform` and `fit_transform`, so `X`, `y`, `X_train` and `X_test` cannot be
+# renamed to lowercase without breaking the estimator contract. The unused `y`
+# parameter is likewise required: the pipeline always passes it.
+"src/cronical/data/preprocessing.py" = ["N803", "N806", "ARG002"]
 
 [tool.ruff.lint.flake8-tidy-imports]
 # Relative imports above the parent package break reusable packaging.
@@ -210,10 +224,10 @@ pretty = true
 exclude = ["^notebooks/"]
 
 [[tool.mypy.overrides]]
-# pandas does not ship a py.typed marker, so mypy would otherwise skip it and
-# silently treat every DataFrame operation as Any. Following the untyped import
-# makes mypy read pandas' own inline annotations instead.
-module = ["pandas", "pandas.*"]
+# Neither pandas nor joblib ships a py.typed marker, so mypy would otherwise skip
+# them and silently treat every DataFrame and dump() call as Any. Following the
+# untyped import makes mypy read their own inline annotations instead.
+module = ["pandas", "pandas.*", "joblib", "joblib.*"]
 follow_untyped_imports = true
 
 [[tool.mypy.overrides]]

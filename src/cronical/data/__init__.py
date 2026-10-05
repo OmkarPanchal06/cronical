@@ -35,6 +35,10 @@ Current contents
     nothing is imputed here.
 ``report``
     Typed structures describing what validation found.
+``preprocessing``
+    Leakage-safe feature preparation: sentinel handling, imputation, and
+    model-appropriate scaling, composed as a scikit-learn pipeline so the same
+    fitted object can serve training, validation and inference.
 
 Data handling rules
 -------------------
@@ -43,9 +47,11 @@ Data handling rules
 * **Nothing is invented.** Every figure in a report is computed from the dataset
   that was actually inspected.
 * **Zero sentinels are surfaced, not resolved.** A recorded glucose of ``0`` is
-  not a measurement. Validation reports those cells and stops; deciding whether
-  to impute, drop or model them is a preprocessing decision that must be made
-  explicitly and recorded.
+  not a measurement. Validation reports those cells; preprocessing converts them
+  to missing values and imputes from the training partition only.
+* **Learned statistics come from training data only.** Medians and scaling
+  parameters fitted on the full dataset would leak information about held-out
+  rows and make reported performance optimistic for the wrong reason.
 """
 
 from __future__ import annotations
@@ -57,12 +63,30 @@ from cronical.data.errors import (
     DatasetPathError,
     DatasetReadError,
     DatasetValidationError,
+    FeatureContractError,
+    PreprocessingError,
+    SplitError,
 )
 from cronical.data.loader import (
     default_dataset_path,
     load_and_validate,
     load_dataset,
     resolve_dataset_path,
+)
+from cronical.data.preprocessing import (
+    DatasetSplit,
+    FeatureContract,
+    SentinelZeroHandler,
+    build_preprocessor,
+    build_training_pipeline,
+    describe_preprocessor,
+    dump_preprocessor,
+    fit_preprocessor,
+    load_preprocessor,
+    save_preprocessor,
+    split_dataset,
+    transform_features,
+    transform_patient,
 )
 from cronical.data.report import (
     ColumnQuality,
@@ -109,17 +133,33 @@ __all__ = [
     "DatasetNotFoundError",
     "DatasetPathError",
     "DatasetReadError",
+    "DatasetSplit",
     "DatasetValidationError",
+    "FeatureContract",
+    "FeatureContractError",
     "IssueCode",
+    "PreprocessingError",
+    "SentinelZeroHandler",
     "Severity",
+    "SplitError",
     "ValidationIssue",
+    "build_preprocessor",
+    "build_training_pipeline",
     "default_dataset_path",
+    "describe_preprocessor",
     "documented_predictors",
     "documented_target",
+    "dump_preprocessor",
+    "fit_preprocessor",
     "load_and_validate",
     "load_dataset",
+    "load_preprocessor",
     "missing_required_columns",
     "raise_for_errors",
     "resolve_dataset_path",
+    "save_preprocessor",
+    "split_dataset",
+    "transform_features",
+    "transform_patient",
     "validate_dataframe",
 ]

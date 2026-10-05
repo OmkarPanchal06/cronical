@@ -41,9 +41,12 @@ __all__ = [
     "PACKAGE_DIR",
     "PROJECT_ROOT",
     "Environment",
+    "ImputationStrategy",
     "LogFormat",
     "LogSettings",
     "Paths",
+    "PreprocessingSettings",
+    "ScalingMode",
     "Settings",
     "get_settings",
     "reload_settings",
@@ -82,6 +85,49 @@ class LogFormat(StrEnum):
 
     TEXT = "text"
     JSON = "json"
+
+
+class ScalingMode(StrEnum):
+    """Which scaling, if any, a preprocessing pipeline should apply.
+
+    Lives here rather than in :mod:`cronical.data.preprocessing` so that
+    :mod:`cronical.config` stays free of any dependency on pandas or
+    scikit-learn.
+    """
+
+    NONE = "none"
+    STANDARD = "standard"
+
+
+#: Imputation strategies accepted by :class:`sklearn.impute.SimpleImputer`.
+ImputationStrategy = Literal["median", "mean", "most_frequent", "constant"]
+
+
+class PreprocessingSettings(BaseModel):
+    """Feature-preparation policy, configured via ``CRONICAL_PREPROCESSING__*``.
+
+    These settings define *how* features are prepared, never *what* the schema
+    contains: column names come from :mod:`cronical.data.schema`, not from here.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    imputation_strategy: ImputationStrategy = "median"
+    default_scaling: ScalingMode = ScalingMode.STANDARD
+    test_size: float = Field(default=0.2, gt=0.0, lt=1.0)
+    artifact_name: str = "preprocessor.joblib"
+
+    @field_validator("imputation_strategy", mode="before")
+    @classmethod
+    def _normalise_strategy(cls, value: object) -> object:
+        """Lower-case the strategy so ``Median`` and ``median`` behave alike."""
+        return value.strip().lower() if isinstance(value, str) else value
+
+    @field_validator("default_scaling", mode="before")
+    @classmethod
+    def _normalise_scaling(cls, value: object) -> object:
+        """Lower-case the mode so ``Standard`` and ``standard`` behave alike."""
+        return value.strip().lower() if isinstance(value, str) else value
 
 
 class LogSettings(BaseModel):
@@ -286,6 +332,7 @@ class Settings(BaseSettings):
     streamlit_port: int = Field(default=8501, ge=1, le=65535)
 
     log: LogSettings = Field(default_factory=LogSettings)
+    preprocessing: PreprocessingSettings = Field(default_factory=PreprocessingSettings)
 
     #: Field names whose values must never appear in logs or API responses.
     #: Currently empty because the project stores no credentials; add a name
@@ -314,6 +361,11 @@ class Settings(BaseSettings):
     def model_path(self) -> Path:
         """Expected location of the persisted model artifact."""
         return self.paths.models_dir / self.model_artifact_name
+
+    @property
+    def preprocessor_path(self) -> Path:
+        """Expected location of the persisted fitted preprocessor."""
+        return self.paths.models_dir / self.preprocessing.artifact_name
 
     @property
     def has_trained_model(self) -> bool:

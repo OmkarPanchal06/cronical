@@ -12,6 +12,9 @@ Hierarchy::
     +-- DatasetFormatError
     +-- DatasetReadError
     +-- DatasetValidationError
+    +-- PreprocessingError
+        +-- FeatureContractError
+        +-- SplitError
 
 The split matters: :class:`DatasetValidationError` carries a full
 :class:`~cronical.data.report.DataQualityReport`, so a caller can inspect every
@@ -34,6 +37,9 @@ __all__ = [
     "DatasetPathError",
     "DatasetReadError",
     "DatasetValidationError",
+    "FeatureContractError",
+    "PreprocessingError",
+    "SplitError",
 ]
 
 #: Where a developer should look when a dataset is missing.
@@ -112,3 +118,37 @@ class DatasetValidationError(CronicalDataError):
         errors = report.errors
         summary = "; ".join(f"{issue.code}: {issue.message}" for issue in errors)
         super().__init__(f"Dataset failed {len(errors)} validation check(s): {summary}")
+
+
+class PreprocessingError(CronicalDataError):
+    """A feature-preparation step could not be completed."""
+
+
+class FeatureContractError(PreprocessingError):
+    """The feature frame does not satisfy the documented schema.
+
+    Raised for a missing required column, a column that is not numeric, or input
+    whose shape cannot be aligned with the schema at all.
+
+    Args:
+        message: Explanation naming the offending columns or shape.
+    """
+
+    def __init__(self, message: str) -> None:
+        self.message = message
+        super().__init__(f"Feature contract violated: {message}")
+
+
+class SplitError(PreprocessingError):
+    """A train/test split cannot be produced from the supplied dataset.
+
+    Raised before any splitting is attempted, for conditions such as a class with
+    too few members to appear in both partitions.
+
+    Args:
+        message: Explanation of what makes the split impossible.
+    """
+
+    def __init__(self, message: str) -> None:
+        self.message = message
+        super().__init__(f"Cannot split dataset: {message}")

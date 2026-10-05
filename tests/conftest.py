@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
@@ -45,6 +45,39 @@ CLEAN_ROWS: tuple[tuple[int | float, ...], ...] = (
     (1, 85, 66, 23, 94, 26.6, 0.351, 32, 0),
     (8, 183, 64, 24, 110, 23.3, 0.672, 41, 1),
     (1, 90, 62, 20, 84, 25.2, 0.482, 28, 0),
+)
+
+#: Synthetic rows for preprocessing tests. As with :data:`CLEAN_ROWS`, these are
+#: invented placeholders, **not** observations from the Pima Indians Diabetes
+#: dataset, and no property of that dataset is inferred from them.
+#:
+#: Chosen to exercise every preprocessing path at once:
+#:
+#: * rows 0-11 are ordinary, with no sentinel zeros and no gaps
+#: * row 12 is zero across every sentinel column
+#: * row 13 has a zero ``Glucose`` only
+#: * rows 14-15 carry genuine missing values, plus a zero ``Insulin``
+#: * rows 16-17 hold extreme values and are kept for the leakage tests, so that a
+#:   median computed over all rows differs measurably from the training median
+PREPROCESSING_ROWS: tuple[tuple[float, ...], ...] = (
+    (6, 148, 72, 35, 100, 33.6, 0.627, 50, 1),
+    (1, 85, 66, 23, 94, 26.6, 0.351, 32, 0),
+    (8, 183, 64, 24, 110, 23.3, 0.672, 41, 1),
+    (1, 90, 62, 20, 84, 25.2, 0.482, 28, 0),
+    (4, 110, 66, 25, 120, 24.0, 0.400, 33, 1),
+    (2, 95, 60, 22, 100, 23.5, 0.510, 35, 0),
+    (3, 130, 70, 28, 140, 27.0, 0.610, 45, 1),
+    (5, 105, 68, 26, 130, 26.5, 0.560, 39, 0),
+    (7, 120, 64, 27, 125, 25.0, 0.520, 36, 1),
+    (0, 100, 66, 24, 110, 25.8, 0.430, 31, 0),
+    (2, 140, 70, 30, 150, 29.0, 0.700, 48, 1),
+    (9, 88, 62, 21, 96, 24.5, 0.380, 30, 0),
+    (0, 0, 0, 0, 0, 0.0, 0.250, 22, 0),
+    (11, 0, 82, 30, 160, 31.5, 0.620, 55, 1),
+    (5, float("nan"), 68, 24, 0, 27.5, float("nan"), 44, 1),
+    (3, 95, float("nan"), 22, 100, 24.0, 0.470, 34, 0),
+    (0, 200, 90, 40, 300, 45.0, 0.900, 60, 1),
+    (0, 210, 92, 42, 320, 46.0, 0.950, 62, 0),
 )
 
 CsvWriter = Callable[..., Path]
@@ -108,3 +141,44 @@ def clean_frame() -> pd.DataFrame:
     import pandas as pd
 
     return pd.DataFrame(CLEAN_ROWS, columns=list(REQUIRED_COLUMNS))
+
+
+@pytest.fixture
+def dataset_frame() -> pd.DataFrame:
+    """Return a full dataset with the schema's columns and float feature dtypes.
+
+    Built from :data:`PREPROCESSING_ROWS`, so it passes validation with
+    zero-sentinel and missing-value warnings but no errors.
+    """
+    import pandas as pd
+
+    from cronical.data.schema import FEATURE_COLUMNS, TARGET_COLUMN
+
+    frame = pd.DataFrame(
+        [list(row) for row in PREPROCESSING_ROWS],
+        columns=[*FEATURE_COLUMNS, TARGET_COLUMN],
+    )
+    return frame.astype(dict.fromkeys(FEATURE_COLUMNS, "float64"))
+
+
+@pytest.fixture
+def features_frame(dataset_frame: pd.DataFrame) -> pd.DataFrame:
+    """Return the feature columns of :func:`dataset_frame`, without the target."""
+    from cronical.data.schema import FEATURE_COLUMNS
+
+    return cast("pd.DataFrame", dataset_frame.loc[:, list(FEATURE_COLUMNS)])
+
+
+@pytest.fixture
+def patient_record() -> dict[str, float]:
+    """Return one synthetic patient record using the schema's feature names."""
+    return {
+        "Pregnancies": 2,
+        "Glucose": 0,
+        "BloodPressure": 70,
+        "SkinThickness": 25,
+        "Insulin": 120,
+        "BMI": 28.0,
+        "DiabetesPedigreeFunction": 0.45,
+        "Age": 38,
+    }

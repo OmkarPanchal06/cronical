@@ -20,6 +20,8 @@ from cronical.config import (
     LogFormat,
     LogSettings,
     Paths,
+    PreprocessingSettings,
+    ScalingMode,
     Settings,
     get_settings,
     reload_settings,
@@ -169,6 +171,45 @@ class TestSettings:
     def test_settings_are_immutable(self) -> None:
         with pytest.raises(ValidationError):
             Settings().app_name = "mutated"  # type: ignore[misc]
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("imputation_strategy", 99),
+            ("default_scaling", 7),
+            ("test_size", 0),
+            ("test_size", 1.0),
+            ("test_size", 1.5),
+        ],
+    )
+    def test_invalid_preprocessing_settings_are_rejected(self, field: str, value: object) -> None:
+        """Bad preprocessing configuration must fail on construction, not later."""
+        with pytest.raises(ValidationError):
+            Settings(preprocessing={field: value})
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [("MEDIAN", "median"), ("Mean", "mean"), (" most_frequent ", "most_frequent")],
+    )
+    def test_imputation_strategy_is_normalised(self, raw: str, expected: str) -> None:
+        """Case and whitespace should not change the chosen strategy."""
+        assert PreprocessingSettings(imputation_strategy=raw).imputation_strategy == expected
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [("STANDARD", ScalingMode.STANDARD), ("None", ScalingMode.NONE)],
+    )
+    def test_scaling_mode_is_normalised(self, raw: str, expected: ScalingMode) -> None:
+        assert PreprocessingSettings(default_scaling=raw).default_scaling is expected
+
+    def test_preprocessor_path_follows_the_artifact_name(self, isolated_project_root: Path) -> None:
+        configured = Settings.for_root(
+            isolated_project_root,
+            preprocessing={"artifact_name": "custom_prep.joblib"},
+        )
+        assert configured.preprocessor_path == (
+            isolated_project_root / "models" / "custom_prep.joblib"
+        )
 
 
 class TestLogSettings:
