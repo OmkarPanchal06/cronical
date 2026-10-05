@@ -36,9 +36,10 @@ jobs:
             pyproject.toml
             requirements.txt
 
-      # Only the core extra is installed: the CI gate must not depend on a
-      # multi-hundred-megabyte stack of optional ML dependencies.
-      - name: Install package with core dependencies
+      # Only the `dev` extra is installed. It pulls in `data` (numpy/pandas),
+      # because the data-layer tests need them, but deliberately not the
+      # multi-hundred-megabyte ML, explainability, API or UI stacks.
+      - name: Install package with development dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"

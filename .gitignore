@@ -68,8 +68,11 @@ htmlcov/
 # directory needs its own explicit exception.
 data/raw/*
 !data/raw/.gitkeep
+# The staging instructions are documentation and must be tracked; the data is not.
+!data/raw/README.md
 data/processed/*
 !data/processed/.gitkeep
+!data/processed/README.md
 *.csv
 *.tsv
 *.parquet

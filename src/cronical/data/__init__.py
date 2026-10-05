@@ -2,7 +2,7 @@
 
 Scope
 -----
-This package owns everything between "a dataset exists somewhere" and "a clean,
+This package owns everything between "a CSV exists somewhere" and "a clean,
 modelling-ready table exists". It deliberately contains **no** model code, so the
 same preprocessing can be reused for training, cross-validation and inference
 without dragging estimators along.
@@ -18,12 +18,108 @@ Planned responsibilities
 * Serialised preprocessing artifacts, so inference applies exactly the
   transformations the model was trained on.
 
-Status
-------
-Intentionally empty at this stage. No dataset has been downloaded, and no
-preprocessing logic has been written yet.
+Current contents
+----------------
+``schema``
+    The explicit column contract for the Pima Indians Diabetes dataset, including
+    which columns use zero as a "not recorded" placeholder.
+``errors``
+    A typed exception hierarchy, so callers can distinguish a missing file from a
+    malformed one from a schema violation without parsing message strings.
+``loader``
+    Reads the CSV from a configurable local path. No network access: the dataset
+    is placed in ``data/raw/`` by a developer, never downloaded automatically.
+``validation``
+    Read-only checks over a loaded frame, returning a
+    :class:`~cronical.data.report.DataQualityReport`. Nothing is modified and
+    nothing is imputed here.
+``report``
+    Typed structures describing what validation found.
+
+Data handling rules
+-------------------
+* **Raw data is immutable.** ``data/raw/`` is never edited in place. Cleaning
+  decisions belong to a later preprocessing stage.
+* **Nothing is invented.** Every figure in a report is computed from the dataset
+  that was actually inspected.
+* **Zero sentinels are surfaced, not resolved.** A recorded glucose of ``0`` is
+  not a measurement. Validation reports those cells and stops; deciding whether
+  to impute, drop or model them is a preprocessing decision that must be made
+  explicitly and recorded.
 """
 
 from __future__ import annotations
 
-__all__: list[str] = []
+from cronical.data.errors import (
+    CronicalDataError,
+    DatasetFormatError,
+    DatasetNotFoundError,
+    DatasetPathError,
+    DatasetReadError,
+    DatasetValidationError,
+)
+from cronical.data.loader import (
+    default_dataset_path,
+    load_and_validate,
+    load_dataset,
+    resolve_dataset_path,
+)
+from cronical.data.report import (
+    ColumnQuality,
+    DataQualityReport,
+    IssueCode,
+    Severity,
+    ValidationIssue,
+)
+from cronical.data.schema import (
+    COLUMN_SPECS,
+    COLUMN_SPECS_BY_NAME,
+    DATASET_FILENAME,
+    FEATURE_COLUMNS,
+    FEATURE_SPECS,
+    REQUIRED_COLUMNS,
+    TARGET_COLUMN,
+    VALID_TARGET_VALUES,
+    ZERO_SENTINEL_COLUMNS,
+    ColumnSpec,
+)
+from cronical.data.validation import (
+    documented_predictors,
+    documented_target,
+    missing_required_columns,
+    raise_for_errors,
+    validate_dataframe,
+)
+
+__all__ = [
+    "COLUMN_SPECS",
+    "COLUMN_SPECS_BY_NAME",
+    "DATASET_FILENAME",
+    "FEATURE_COLUMNS",
+    "FEATURE_SPECS",
+    "REQUIRED_COLUMNS",
+    "TARGET_COLUMN",
+    "VALID_TARGET_VALUES",
+    "ZERO_SENTINEL_COLUMNS",
+    "ColumnQuality",
+    "ColumnSpec",
+    "CronicalDataError",
+    "DataQualityReport",
+    "DatasetFormatError",
+    "DatasetNotFoundError",
+    "DatasetPathError",
+    "DatasetReadError",
+    "DatasetValidationError",
+    "IssueCode",
+    "Severity",
+    "ValidationIssue",
+    "default_dataset_path",
+    "documented_predictors",
+    "documented_target",
+    "load_and_validate",
+    "load_dataset",
+    "missing_required_columns",
+    "raise_for_errors",
+    "resolve_dataset_path",
+    "validate_dataframe",
+]

@@ -56,16 +56,24 @@ together:
 
 ### Current status
 
-This repository currently contains the **architecture and engineering
-foundation only**:
+**Stage 1 — architecture and engineering foundation: complete.**
 
 - ✅ Directory layout, packaging and tooling configuration
 - ✅ Environment-driven configuration module with a derived filesystem layout
 - ✅ Structured logging utility
-- ✅ Test suite covering the foundation (config, logging, package structure)
 - ✅ CI pipeline (format, lint, types, tests, build)
-- ⬜ Dataset acquisition and provenance tracking
-- ⬜ Preprocessing pipeline
+
+**Stage 2 — dataset ingestion and validation: complete.**
+
+- ✅ Explicit schema contract (`cronical.data.schema`) with the zero-sentinel rule
+- ✅ Typed exception hierarchy for every failure mode
+- ✅ CSV loader with configurable, project-root-derived paths — no network access
+- ✅ Read-only validation producing a typed data-quality report
+- ✅ Test suite for the foundation and the data layer
+
+**Not started.**
+
+- ⬜ Preprocessing pipeline (including the explicit decision on zero sentinels)
 - ⬜ Model training and evaluation
 - ⬜ SHAP / LIME explainers
 - ⬜ FastAPI service
@@ -74,6 +82,18 @@ foundation only**:
 `CRONICAL_MODEL_VERSION` defaults to `untrained`, and the API and dashboard are
 required to report that no model is available rather than return a placeholder
 prediction.
+
+### Dataset
+
+The project targets the **Pima Indians Diabetes** dataset, published by NIDDK and
+distributed through the UCI Machine Learning Repository (dataset id 329). The CSV
+is **not** included and is **never downloaded automatically** — you place it at
+`data/raw/diabetes.csv` yourself. See [`data/raw/README.md`](data/raw/README.md)
+for provenance, the full schema, and the rules governing raw data.
+
+> The dataset is a specific cohort collected in the 1980s. It is **not** a
+> representative sample of any wider population and does **not** describe current
+> clinical practice. Results measured on it cannot be generalised beyond it.
 
 ---
 
@@ -98,13 +118,18 @@ prediction.
 ```text
 cronical/
 ├── data/                     # Datasets. Contents are git-ignored.
-│   ├── raw/                  # As-downloaded, never modified. Provenance recorded.
+│   ├── raw/                  # As-supplied, never modified. README.md + diabetes.csv.
 │   └── processed/            # Deterministic outputs of the preprocessing pipeline.
 ├── notebooks/                # Exploration and training. Reproducible, not load-bearing.
 ├── src/cronical/             # The installable library.
 │   ├── __init__.py           # Version, disclaimer constants, package contract.
 │   ├── config.py             # Settings + derived Paths. The only source of paths.
 │   ├── data/                 # Ingestion, schema validation, preprocessing.
+│   │   ├── schema.py         # The column contract, incl. the zero-sentinel rule.
+│   │   ├── errors.py         # Typed exception hierarchy.
+│   │   ├── loader.py         # CSV loading. No network access.
+│   │   ├── validation.py     # Read-only checks.
+│   │   └── report.py         # Typed data-quality report structures.
 │   ├── models/               # Feature pipelines, estimators, training, evaluation.
 │   ├── explainability/       # SHAP and LIME. Reads artifacts; never trains.
 │   ├── clinical/             # Clinician-facing rendering. The safety boundary.
@@ -194,40 +219,161 @@ CRONICAL_PROJECT_ROOT=/srv    # -> Settings.project_root, and therefore every pa
 
 ## 3. Planned ML pipeline
 
-**Status: not implemented.** This section is the design contract that the
-implementation will be held to.
+**Status: partially implemented.** Stages 3.1–3.4 (raw → validation) are complete.
+Preprocessing, splitting, training and evaluation are not, and are documented
+below as the design contract the implementation will be held to.
 
-### 3.1 Dataset and provenance
+### 3.1 The three stages
 
-- Select a public, citable diabetes dataset and record **source URL, licence,
-  retrieval date and SHA-256 checksum** in a provenance manifest written to
-  `data/raw/`. Results must be traceable to an exact input.
-- Establish the **prediction target and prediction horizon** explicitly and
-  document them. A model that predicts "is this patient diabetic *now*" and one
-  that predicts "will this patient develop diabetes within N years" are
-  different products with different ethics, and the distinction must not be
-  blurred.
-- Treat any dataset that already encodes a diagnostic decision as a **modelling
-  shortcut**: predicting it back is circular and its metrics are meaningless.
+The data flow is deliberately split so that each stage has one job and cannot
+quietly do another's.
 
-### 3.2 Schema validation
+```text
+   ┌─────────────────────────┐
+   │  RAW  data/raw/         │  Externally supplied CSV. Immutable.
+   │  diabetes.csv           │  Never edited, never committed.
+   └───────────┬─────────────┘
+               │  loader.load_dataset()
+               │  · path from settings, never hard-coded
+               │  · exists? .csv? parses? rectangular?
+               │  · values read exactly as written
+               ▼
+   ┌─────────────────────────┐
+   │  VALIDATION             │  validation.validate_dataframe()
+   │  read-only              │  · schema, dtypes, target, nulls,
+   │  returns a report       │    duplicates, invalid values
+   │  modifies nothing       │  · zero sentinels REPORTED, not fixed
+   └───────────┬─────────────┘
+               │  DataQualityReport
+               ▼
+   ┌─────────────────────────┐
+   │  PREPROCESSING          │  ⬜ NOT IMPLEMENTED
+   │  (future stage)         │  · explicit decision on zero sentinels
+   │  writes to data/        │    (impute / drop / model)
+   │  processed/             │  · imputation stats stored in artifact
+   └─────────────────────────┘
+```
 
-Define an explicit contract — feature names, dtypes, units, expected ranges and
-missing-value conventions — and validate against it on load. Missing features or
-unit drift should fail loudly at the boundary, not silently produce a wrong
-prediction.
+**Nothing crosses a stage boundary silently.** Raw is never written; validation
+never repairs; the loader never coerces.
 
-### 3.3 Preprocessing
+### 3.2 Dataset, source and provenance
+
+| | |
+| --- | --- |
+| Dataset | Pima Indians Diabetes |
+| Publisher | National Institute of Diabetes and Digestive and Kidney Diseases (NIDDK) |
+| Distributed by | UCI Machine Learning Repository, dataset id 329 |
+| Collection era | 1980s |
+| Local filename | `data/raw/diabetes.csv` |
+| In this repository? | **No.** Supplied by you; never downloaded automatically. |
+
+Full details: [`data/raw/README.md`](data/raw/README.md).
+
+**Still to do:** record a provenance manifest with the source URL, licence,
+retrieval date and SHA-256 checksum, so a result can be traced to an exact input
+file. Until that exists, reproducibility rests on the operator's own record.
+
+**Known limitations of this dataset** — properties of the data, not medical
+claims:
+
+- A specific cohort from a specific place and time, **not** a representative
+  sample of any wider population.
+- Does **not** describe current clinical practice, diagnostic criteria or
+  treatment pathways.
+- A research benchmark for comparing methods, not a clinical cohort assembled to
+  answer a clinical question.
+- Collected decades ago, so it cannot reflect contemporary practice.
+
+Any result measured on this dataset inherits all four restrictions.
+
+### 3.3 Data dictionary
+
+The authoritative contract is `src/cronical/data/schema.py`. This table
+documents it; if the two ever disagree, the code wins.
+
+| # | Column | Type | Unit (per source docs) | What it records | Zero handling |
+| --- | --- | --- | --- | --- | --- |
+| 1 | `Pregnancies` | int | count | Number of pregnancies | Zero is a **real** observation |
+| 2 | `Glucose` | int | mg/dL | Plasma glucose concentration | **Zero = not recorded** |
+| 3 | `BloodPressure` | int | mm Hg | Diastolic blood pressure | **Zero = not recorded** |
+| 4 | `SkinThickness` | int | mm | Triceps skin thickness | **Zero = not recorded** |
+| 5 | `Insulin` | int | µU/mL | Two-hour serum insulin | **Zero = not recorded** |
+| 6 | `BMI` | float | kg/m² | Weight ÷ height² | **Zero = not recorded** |
+| 7 | `DiabetesPedigreeFunction` | float | — | Score summarising family history | Zero is ordinary data |
+| 8 | `Age` | int | years | Age in years | Zero is **invalid** |
+| 9 | `Outcome` | int | — | Binary class label, `0` or `1` | Not applicable — the target |
+
+Caveats that apply to this table:
+
+- **Units are documentation, not data.** The CSV contains no unit metadata. They
+  are transcribed from the published dataset description and must be confirmed
+  before any output is interpreted.
+- The dataset documentation does **not** define the test or criteria behind
+  `Outcome`, so this project does not restate or reinterpret what the label means.
+- This table describes *data*. It contains no diagnostic thresholds, no reference
+  ranges and no clinical decision rules, by design.
+
+#### The zero-sentinel rule
+
+`Glucose`, `BloodPressure`, `SkinThickness`, `Insulin` and `BMI` use `0` to mean
+**"this measurement was not recorded"**. A recorded value of exactly zero in any
+of them is not a physiological measurement, so accepting it as a real number
+would silently corrupt everything computed from it.
+
+| Stage | Treatment of zero sentinels |
+| --- | --- |
+| Raw file | Left exactly as supplied |
+| Loader | Left exactly as written |
+| Validation | **Counted and reported** as a warning per column; the data is untouched |
+| Preprocessing | ⬜ Decision (impute / drop / model) to be made explicitly later |
+
+They are **warnings**, not errors: this is a documented property of the dataset,
+so failing hard would make the loader unusable on its own target file. They are
+escalated to an **error** only when an entire sentinel column is zero, meaning
+that column carries no usable measurement at all.
+
+### 3.4 What validation checks
+
+`validation.validate_dataframe(frame)` reads the frame and returns a
+`DataQualityReport`. It never raises for a data problem, so one pass surfaces
+every issue.
+
+| Area | Checks |
+| --- | --- |
+| Structure | Dataset non-empty; all required columns present; outcome column named as expected; unexpected columns flagged |
+| Types | Every predictor numeric; outcome numeric |
+| Target | Outcome contains only `0` and `1`; distribution recorded |
+| Content | No negative values; no zero `Age` |
+| Reported | Duplicate rows; null cells; wholly-null columns; zero sentinels; wholly-zero sentinel columns |
+
+Severity is explicit. **Errors** mean the dataset cannot be used (missing column,
+non-numeric predictor, non-binary target, wholly-null column, impossible value).
+**Warnings** mean a human should know (duplicates, some nulls, zero sentinels,
+unknown columns).
+
+Use `raise_for_errors(report)` when you would rather fail fast; the raised
+`DatasetValidationError` still carries the full report.
+
+The report contains row and column counts, column names, dtypes, per-column
+missing counts, zero counts for sentinel columns, duplicate count, target class
+distribution, and every error and warning with stable issue codes. Every figure is
+computed from the dataset actually inspected — nothing is defaulted or carried
+over.
+
+### 3.5 Preprocessing — not implemented
 
 A single deterministic entry point, fitted on the training split only:
 
-- Missing-value handling, with imputation statistics recorded in the artifact.
-- Encoding for categorical features.
+- An **explicit, recorded decision** on zero-sentinel values: impute, drop, or
+  model the missingness. This is the first thing that stage must settle.
+- Missing-value handling, with imputation statistics stored in the artifact.
 - Scaling where the estimator requires it.
-- Optional, **explicitly justified** feature transforms — no silent feature
-  engineering whose effect cannot be explained later.
+- No silent feature engineering whose effect cannot be explained later.
 
-### 3.4 Splitting and leakage control
+Outputs land in `data/processed/`, never back in `data/raw/`.
+
+### 3.6 Splitting and leakage control
 
 - One deterministic split, created once and reused for every experiment.
 - Stratified splitting when the outcome is imbalanced.
@@ -236,7 +382,7 @@ A single deterministic entry point, fitted on the training split only:
 - If temporal data is used, split chronologically. A random split on
   time-ordered clinical data leaks the future into the past.
 
-### 3.5 Model progression
+### 3.7 Model progression
 
 | Stage | Model | Purpose |
 | --- | --- | --- |
@@ -248,7 +394,7 @@ A logistic-regression baseline is not a formality — with an
 `interpretable=True` sklearn model, its coefficients are themselves a form of
 explanation, and it is the fallback whenever SHAP is unavailable.
 
-### 3.6 Evaluation
+### 3.8 Evaluation
 
 Metrics appropriate for an imbalanced binary classification problem:
 ROC-AUC, PR-AUC, sensitivity, specificity, PPV, NPV, and calibration
@@ -265,7 +411,7 @@ Reported honestly:
   `models/evaluation.py`.** Placeholder values are forbidden. Until a model is
   trained, `reports/` states that no model has been fitted.
 
-### 3.7 Reproducibility
+### 3.9 Reproducibility
 
 Seeded via `CRONICAL_RANDOM_SEED`; artifacts persisted under `models/` with the
 resolved config and data checksum embedded, so a given artifact can always be
@@ -433,7 +579,7 @@ API response payload.
    is deliberate and honest.
 5. **No fabricated data.** No dataset is bundled, synthesised or downloaded
    without a recorded licence and provenance.
-6. **Known limitations must be stated**, not just known. Section 3.6 defines
+6. **Known limitations must be stated**, not just known. Section 3.8 defines
    where limitations belong: next to the numbers.
 7. **Fail loudly.** When the system cannot answer — no model, insufficient
    inputs, schema mismatch — it must say so instead of returning something that
@@ -535,6 +681,43 @@ log = get_logger(__name__)
 log.info("project root resolved", extra={"project_root": settings.project_root})
 print(settings.paths.raw_data_dir)  # always pathlib, never a hard-coded string
 ```
+
+### Using the data layer
+
+Place the CSV at `data/raw/diabetes.csv` first — see
+[`data/raw/README.md`](data/raw/README.md). Nothing is downloaded for you.
+
+```python
+from cronical.data.loader import load_and_validate
+
+frame, report = load_and_validate()  # data/raw/diabetes.csv by default
+print(report.render())  # human-readable summary
+report.to_dict()  # JSON-ready, for reports or an API
+
+if not report.is_valid:
+    for issue in report.errors:
+        print(issue)
+```
+
+Load and validate separately if you want to handle them independently:
+
+```python
+from cronical.data.errors import DatasetNotFoundError
+from cronical.data.loader import load_dataset
+from cronical.data.validation import raise_for_errors, validate_dataframe
+
+try:
+    frame = load_dataset()
+except DatasetNotFoundError as exc:
+    print(exc)  # names the expected path
+else:
+    report = raise_for_errors(validate_dataframe(frame))
+    print(f"{report.row_count} rows, {report.duplicate_count} duplicates")
+    print(f"{len(report.errors)} errors, {len(report.warnings)} warnings")
+```
+
+Neither function modifies anything. The frame is returned exactly as parsed, and
+validation only reads — zero-sentinel values are reported, never imputed.
 
 ### Environment variables
 

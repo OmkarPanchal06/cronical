@@ -103,8 +103,10 @@ GITKEEP_FILES = (
 )
 
 IGNORED_ARTIFACTS = (
-    "data/raw/pima.csv",
+    "data/raw/diabetes.csv",
+    "data/raw/patients.csv",
     "data/processed/features.parquet",
+    "data/processed/train.csv",
     "data/raw/survey.sav",
     "models/diabetes_risk_model.joblib",
     "reports/figures/shap_beeswarm.png",
@@ -119,6 +121,7 @@ TRACKED_FILES = (
     "tests/test_package.py",
     ".env.example",
     "README.md",
+    "data/raw/README.md",
 )
 
 
