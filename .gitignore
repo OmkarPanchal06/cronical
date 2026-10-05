@@ -1,0 +1,121 @@
+# =========================================================================== #
+# Cronical - ignore rules
+#
+# Rule of thumb: commit source, configuration and documentation. Never commit
+# data, model weights, secrets or generated artefacts.
+# =========================================================================== #
+
+# --- Secrets and local configuration -------------------------------------- #
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+credentials.json
+
+# --- Python ---------------------------------------------------------------- #
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+sdist/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# --- Virtual environments -------------------------------------------------- #
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# --- Test, lint and type-check caches --------------------------------------- #
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+
+# --- Jupyter --------------------------------------------------------------- #
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# --- Data ------------------------------------------------------------------ #
+# Track the directory structure via .gitkeep, but never the data itself.
+# Public health datasets are often licence-restricted or too large for Git, and
+# some are individually identifiable.
+#
+# Note: negations are written per directory on purpose. Git will not re-include
+# a file through a `**` negation such as `!data/**/.gitkeep`, so each tracked
+# directory needs its own explicit exception.
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+*.csv
+*.tsv
+*.parquet
+*.feather
+*.arff
+*.jsonl
+*.sav
+*.dta
+*.xlsx
+*.xls
+
+# --- Model artefacts ------------------------------------------------------- #
+# Binaries are large, platform-dependent and reproducible from the notebooks.
+models/*
+!models/.gitkeep
+*.joblib
+*.pkl
+*.pickle
+*.onnx
+*.pt
+*.pth
+*.h5
+*.keras
+*.hdf5
+*.safetensors
+*.gguf
+
+# --- Generated reports and figures ----------------------------------------- #
+reports/figures/*
+!reports/figures/.gitkeep
+reports/**/*.png
+reports/**/*.jpg
+reports/**/*.jpeg
+reports/**/*.svg
+reports/**/*.pdf
+reports/**/*.html
+
+# --- Editors and IDEs ------------------------------------------------------ #
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# --- OS -------------------------------------------------------------------- #
+*.lnk
+desktop.ini

@@ -1,0 +1,68 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Cancel superseded runs on the same ref to keep CI feedback fast.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Lint, types and tests
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            requirements.txt
+
+      # Only the core extra is installed: the CI gate must not depend on a
+      # multi-hundred-megabyte stack of optional ML dependencies.
+      - name: Install package with core dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Check formatting
+        run: ruff format --check --diff .
+
+      - name: Lint
+        run: ruff check --output-format=github .
+
+      - name: Type check
+        # Uses the `files` setting in pyproject.toml, so the local `mypy`
+        # invocation and CI check exactly the same set of modules.
+        run: mypy
+
+      - name: Run tests
+        env:
+          CRONICAL_ENVIRONMENT: ci
+          CRONICAL_LOG__LEVEL: WARNING
+          CRONICAL_LOG__FORMAT: json
+        run: pytest --cov=cronical --cov-report=term-missing --cov-report=xml
+
+      - name: Verify the package builds
+        run: |
+          python -m pip install --upgrade build
+          python -m build --wheel
+          python -c "import zipfile,glob; w=glob.glob('dist/*.whl')[0]; print('\n'.join(sorted(zipfile.ZipFile(w).namelist())))"
