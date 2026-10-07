@@ -37,8 +37,9 @@ jobs:
             requirements.txt
 
       # Only the `dev` extra is installed. It pulls in `data` (numpy/pandas),
-      # because the data-layer tests need them, but deliberately not the
-      # multi-hundred-megabyte ML, explainability, API or UI stacks.
+      # `preprocessing` (scikit-learn/joblib), `ml` (xgboost) and `reporting`
+      # (matplotlib), because the model-layer tests need them, but deliberately
+      # not the explainability, API or UI stacks.
       - name: Install package with development dependencies
         run: |
           python -m pip install --upgrade pip

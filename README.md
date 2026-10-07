@@ -80,9 +80,22 @@ together:
 - ✅ Optional joblib serialisation of the fitted preprocessor
 - ✅ Leakage prevention asserted by test, not just by convention
 
+**Stage 4 — baseline training and evaluation framework: complete.**
+
+- ✅ Typed model configuration and a baseline registry with explicit hyperparameters
+- ✅ Logistic Regression, Random Forest and XGBoost composed with the preprocessing pipeline
+- ✅ Stratified, deterministic split; preprocessing fitted on training rows only
+- ✅ Full metric set computed from probability scores, with undefined metrics reported as gaps
+- ✅ Model comparison, evaluation report generation, and figures from real predictions
+- ✅ joblib persistence with metadata stored separately from the pipeline
+
+**No experiment has been run on the real dataset** — `data/raw/diabetes.csv` is
+absent and is never downloaded automatically. See
+[`reports/model_evaluation.md`](reports/model_evaluation.md), which states this
+explicitly rather than containing invented figures.
+
 **Not started.**
 
-- ⬜ Model training and evaluation
 - ⬜ SHAP / LIME explainers
 - ⬜ FastAPI service
 - ⬜ Streamlit dashboard
@@ -139,7 +152,7 @@ cronical/
 │   │   ├── validation.py     # Read-only checks.
 │   │   ├── report.py         # Typed data-quality report structures.
 │   │   └── preprocessing.py  # Leakage-safe feature pipeline, train/test split.
-│   ├── models/               # Feature pipelines, estimators, training, evaluation.
+│   ├── models/               # Baselines, training, evaluation, figures, reporting.
 │   ├── explainability/       # SHAP and LIME. Reads artifacts; never trains.
 │   ├── clinical/             # Clinician-facing rendering. The safety boundary.
 │   └── utils/                # Cross-cutting helpers (logging).
@@ -228,10 +241,10 @@ CRONICAL_PROJECT_ROOT=/srv    # -> Settings.project_root, and therefore every pa
 
 ## 3. Planned ML pipeline
 
-**Status: partially implemented.** Stages 3.1–3.6 (raw → validation →
-preprocessing → leakage-safe split) are complete. Model training, evaluation and
-everything downstream of them are not, and are documented below as the design
-contract the implementation will be held to.
+**Status: partially implemented.** Stages 3.1–3.9 (raw → validation →
+preprocessing → leakage-safe split → baseline training → evaluation) are
+complete. Interpretation, serving and the user interfaces are not, and are
+documented below as the design contract the implementation will be held to.
 
 ### 3.1 The three stages
 
@@ -277,7 +290,18 @@ quietly do another's.
                │  fitted Pipeline (reused at inference)
                ▼
    ┌─────────────────────────┐
-   │  MODEL TRAINING         │  ⬜ NOT IMPLEMENTED
+   │  MODEL TRAINING         │  cronical.models.train
+   │  one fitted Pipeline    │  · LogisticRegression, standardised
+   │  carries both stages    │  · RandomForest + XGBoost, unscaled
+   │                         │  · hyperparameters from models.config
+   └───────────┬─────────────┘
+               │  held-out predictions only
+               ▼
+   ┌─────────────────────────┐
+   │  EVALUATION             │  cronical.models.evaluate
+   │  metrics from scores    │  · ROC-AUC / PR-AUC from probabilities
+   │  never from 0/1 labels  │  · undefined metrics reported as gaps
+   │                         │  · 0.5 threshold: technical, not clinical
    └─────────────────────────┘
 ```
 
@@ -543,40 +567,121 @@ that passing it changes no statistic.
 - No grouping by patient. The dataset has one row per record, so there is nothing
   to group by — but a dataset with repeated visits would need it.
 
-### 3.7 Model progression
+### 3.7 Model progression — baselines implemented
 
-| Stage | Model | Purpose |
+Three baselines are implemented and compared. **No hyperparameter tuning happens
+at this stage**: the goal is a reliable reference point, not the best model this
+data could support.
+
+| Model | Preprocessing | Why it is in the comparison |
 | --- | --- | --- |
-| Baseline | Logistic regression | Interpretable floor. If a complex model cannot beat it, ship the baseline. |
-| Candidate | Gradient-boosted trees | Expected to outperform on tabular data. |
-| Ensemble | Stacked / soft-voting | Only if it earns its complexity. |
+| `LogisticRegression` | standardised | Interpretable floor. One readable coefficient per feature, and the fallback whenever an explainer is unavailable. |
+| `RandomForestClassifier` | unscaled | Bagged trees. Invariant to monotone feature rescaling, robust to interactions and to outliers. |
+| `XGBClassifier` | unscaled | Gradient boosting. Usually the strongest tabular baseline, and the easiest to overfit if left unbounded — hence the modest defaults. |
 
-A logistic-regression baseline is not a formality — with an
-`interpretable=True` sklearn model, its coefficients are themselves a form of
-explanation, and it is the fallback whenever SHAP is unavailable.
+All hyperparameters, seeds and preprocessing paths live in
+`cronical.models.config`, so a run is reproducible from its configuration alone.
 
-### 3.8 Evaluation
+### 3.8 Why three model families, and why accuracy alone is not enough
 
-Metrics appropriate for an imbalanced binary classification problem:
-ROC-AUC, PR-AUC, sensitivity, specificity, PPV, NPV, and calibration
-(Brier score, calibration curve). Chosen on a **held-out split never used for
-model selection**.
+**Why compare families.** They fail differently, which is what makes the comparison
+informative. A linear model is transparent and may be preferred *for that reason*
+at a lower score. A forest is stable and resistant to feature scaling. A boosted
+model may win on accuracy while being harder to interpret and easier to overfit.
+A leaderboard between three untuned baselines on one split is the start of a
+discussion, not the end of one.
 
-Reported honestly:
+**Why accuracy is insufficient.** On a dataset where one class is much more common
+than the other, a model that predicts the majority class every time can post a
+high accuracy while detecting almost nothing of interest. Accuracy does not
+distinguish the two kinds of mistake: a false positive and a false negative are
+counted identically, even though they carry very different weight in any
+downstream decision.
 
-- Point estimates **with confidence intervals**, not bare numbers.
-- Performance broken down by relevant subgroups, so a good average does not
-  hide a subgroup where the model is worse than chance.
-- Limitations documented alongside the numbers.
-- **No metric is written to a report unless it was computed by
-  `models/evaluation.py`.** Placeholder values are forbidden. Until a model is
-  trained, `reports/` states that no model has been fitted.
+That is why the metric set here is reported in full — precision, recall,
+specificity, F1, **and** ROC-AUC and PR-AUC — and why no model is selected on a
+single number.
 
-### 3.9 Reproducibility
+**Ranking is not selection.** `compare_models()` orders by ROC-AUC for technical
+comparison, and its documentation says so explicitly. ROC-AUC summarises behaviour
+across *every* threshold, which makes it useful for comparing ranking ability and
+useless for choosing an operating point. It also ignores class balance, which is
+why PR-AUC is reported alongside it.
 
-Seeded via `CRONICAL_RANDOM_SEED`; artifacts persisted under `models/` with the
-resolved config and data checksum embedded, so a given artifact can always be
-traced back to the code and data that produced it.
+Nothing here is tuned, validated on held-out data for selection, or assessed for
+calibration. Selecting a model, and selecting a threshold, are both later-stage
+decisions that need evidence this stage does not produce.
+
+### 3.9 Evaluation — implemented
+
+`cronical.models.evaluate` computes, for each model on the held-out split:
+
+| Group | Metrics |
+| --- | --- |
+| Counts | true negatives, false positives, false negatives, true positives |
+| Ratios | accuracy, precision, recall, F1, specificity, sensitivity |
+| Ranking | ROC-AUC, PR-AUC (average precision) |
+
+Three rules govern this:
+
+1. **Rank metrics come from probability scores**, never from thresholded labels. An
+   AUC computed from 0/1 predictions discards the ordering information that makes
+   it informative, and would report a different quantity.
+2. **An undefined metric is a gap, not a zero.** Precision with no positive
+   predictions, or ROC-AUC with a class absent, are reported as `None` and named in
+   `Metrics.undefined` — so an absent number can never be read as a poor one.
+3. **No metric is invented.** Every figure comes from arrays a fitted pipeline
+   produced. No metric is written unless it was computed.
+
+`compare_models()` orders results by ROC-AUC for technical comparison and says so
+in its own documentation: that ordering is **not** a model selection.
+
+Figures — confusion matrix, ROC curve, precision-recall curve — are drawn in
+`cronical.models.figures` from real predictions and written to
+`reports/figures/`. No placeholder graphic is ever generated.
+
+#### What has not been done yet
+
+- **No confidence intervals.** A single split gives one number per metric.
+- **No repeated or cross-validated runs.**
+- **No calibration assessment.** No Brier score or reliability curve yet.
+- **No subgroup breakdown.** An aggregate figure can hide a group where a model
+  performs far worse.
+
+#### Report status
+
+[`reports/model_evaluation.md`](reports/model_evaluation.md) currently contains
+**no results**, because `data/raw/diabetes.csv` is absent and nothing is
+downloaded automatically. It states that explicitly. Writing plausible figures
+before any model has been fitted would be fabricating results.
+
+### 3.10 Reproducibility — implemented
+
+Every run records an `ExperimentMetadata` block:
+
+| Field | Purpose |
+| --- | --- |
+| `dataset_path`, `dataset_sha256` | Ties the result to an exact input file |
+| `feature_names`, `target` | What was modelled |
+| `random_state`, `test_size` | Reproduces the split and the estimator |
+| `decision_threshold` | The cut-off actually used when scoring |
+| `preprocessing` | What the fitted transforms actually learned |
+| `model_configuration` | Every hyperparameter, as set |
+| `created_at`, `project_version` | When, and with which version of the code |
+
+Artifacts are persisted under `models/` with joblib, and the metadata is written to
+a **separate** `.json` beside the pipeline. Keeping them apart means provenance can
+be read and diffed without unpickling anything.
+
+`describe_preprocessor()` returns the fitted medians and scaling parameters, so a
+run can be audited without refitting anything. Nothing is recomputed from data at
+report time, and no metric is written into the metadata — metrics belong in a
+report, not in an artifact.
+
+Seeds are never changed implicitly. `train_all_baselines()` passes one seed to
+every model so all three are scored on exactly the same partition; a difference
+between two models is then a difference between the models, not between the data
+each happened to see.
 
 ---
 
@@ -740,7 +845,7 @@ API response payload.
    is deliberate and honest.
 5. **No fabricated data.** No dataset is bundled, synthesised or downloaded
    without a recorded licence and provenance.
-6. **Known limitations must be stated**, not just known. Section 3.8 defines
+6. **Known limitations must be stated**, not just known. Section 3.9 defines
    where limitations belong: next to the numbers.
 7. **Fail loudly.** When the system cannot answer — no model, insufficient
    inputs, schema mismatch — it must say so instead of returning something that
@@ -973,6 +1078,8 @@ pipeline = load_preprocessor()  # reuses the same transformations
 | `CRONICAL_PREPROCESSING__DEFAULT_SCALING` | `standard` | `standard` for linear models, `none` for tree ensembles. |
 | `CRONICAL_PREPROCESSING__TEST_SIZE` | `0.2` | Fraction held out by `split_dataset()`. |
 | `CRONICAL_PREPROCESSING__ARTIFACT_NAME` | `preprocessor.joblib` | Filename for the fitted preprocessor under `models/`. |
+| `CRONICAL_TRAINING__DECISION_THRESHOLD` | `0.5` | Probability at which a prediction becomes positive. **A technical default, not a clinical cut-off.** |
+| `CRONICAL_TRAINING__N_JOBS` | `-1` | Parallelism passed to estimators that support it. |
 | `CRONICAL_API_HOST` | `127.0.0.1` | API bind address. |
 | `CRONICAL_API_PORT` | `8000` | API port. |
 | `CRONICAL_API_RELOAD` | `true` | Auto-reload for local development. |

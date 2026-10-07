@@ -48,6 +48,7 @@ __all__ = [
     "PreprocessingSettings",
     "ScalingMode",
     "Settings",
+    "TrainingSettings",
     "get_settings",
     "reload_settings",
 ]
@@ -101,6 +102,33 @@ class ScalingMode(StrEnum):
 
 #: Imputation strategies accepted by :class:`sklearn.impute.SimpleImputer`.
 ImputationStrategy = Literal["median", "mean", "most_frequent", "constant"]
+
+
+class TrainingSettings(BaseModel):
+    """Model-fitting policy, configured via ``CRONICAL_TRAINING__*``.
+
+    Nothing here is a clinical parameter.
+    ``decision_threshold`` is the probability at which a classifier's default
+    prediction flips to positive. It is a **technical default inherited from
+    scikit-learn's convention**, not a medically validated cut-off, and it
+    carries no clinical meaning whatsoever.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    decision_threshold: float = Field(default=0.5, gt=0.0, lt=1.0)
+    n_jobs: int = -1
+
+    @field_validator("decision_threshold", mode="before")
+    @classmethod
+    def _coerce_threshold(cls, value: object) -> object:
+        """Accept a numeric string, as environment variables supply."""
+        if isinstance(value, str):
+            try:
+                return float(value)
+            except ValueError as exc:
+                raise ValueError("decision_threshold must be a number") from exc
+        return value
 
 
 class PreprocessingSettings(BaseModel):
@@ -333,6 +361,7 @@ class Settings(BaseSettings):
 
     log: LogSettings = Field(default_factory=LogSettings)
     preprocessing: PreprocessingSettings = Field(default_factory=PreprocessingSettings)
+    training: TrainingSettings = Field(default_factory=TrainingSettings)
 
     #: Field names whose values must never appear in logs or API responses.
     #: Currently empty because the project stores no credentials; add a name

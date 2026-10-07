@@ -61,6 +61,10 @@ ml = [
     "imbalanced-learn>=0.12",
     "xgboost>=2.0",
 ]
+# Plots for the evaluation report.
+reporting = [
+    "matplotlib>=3.8",
+]
 # Post-hoc explanation engines.
 explainability = [
     "shap>=0.46",
@@ -86,7 +90,7 @@ notebooks = [
     "seaborn>=0.13",
 ]
 dev = [
-    "cronical[data,preprocessing]",
+    "cronical[data,preprocessing,ml,reporting]",
     "pytest>=8.2",
     "pytest-cov>=5.0",
     "ruff>=0.6",
@@ -97,7 +101,7 @@ dev = [
     "pre-commit>=3.8",
 ]
 all = [
-    "cronical[data,ml,explainability,api,ui,notebooks,dev]",
+    "cronical[data,preprocessing,ml,explainability,reporting,api,ui,notebooks,dev]",
 ]
 
 [project.urls]

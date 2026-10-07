@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, cast
 import pytest
 
 from cronical.config import Settings, reload_settings
+from cronical.data.preprocessing import DatasetSplit
 from cronical.data.schema import REQUIRED_COLUMNS
 from cronical.utils.logging import reset_logging
 
@@ -182,3 +183,60 @@ def patient_record() -> dict[str, float]:
         "DiabetesPedigreeFunction": 0.45,
         "Age": 38,
     }
+
+
+#: Seed for the synthetic modelling fixture. Fixed so the dataset is identical
+#: on every run and any test failure is reproducible.
+MODELLING_SEED = 20240501
+
+
+@pytest.fixture
+def modelling_frame() -> pd.DataFrame:
+    """Return a synthetic dataset shaped like the Pima schema.
+
+    Generated from a fixed seed rather than transcribed, so it has enough rows for
+    a stable stratified split and a learnable but imperfect signal.
+
+    This is **invented data**. It resembles the real schema and nothing more. No
+    performance figure derived from it describes the Pima Indians Diabetes dataset,
+    and none may be quoted as such.
+    """
+    import numpy as np
+    import pandas as pd
+
+    from cronical.data.schema import FEATURE_COLUMNS, TARGET_COLUMN
+
+    generator = np.random.default_rng(MODELLING_SEED)
+    rows = 300
+    glucose = generator.normal(120.0, 30.0, rows)
+    insulin = generator.normal(120.0, 45.0, rows)
+
+    frame = pd.DataFrame(
+        {
+            "Pregnancies": generator.integers(0, 10, rows).astype(float),
+            # Zero sentinels in the columns the schema flags.
+            "Glucose": np.where(generator.random(rows) < 0.20, 0.0, glucose),
+            "BloodPressure": generator.normal(72.0, 12.0, rows),
+            "SkinThickness": np.where(
+                generator.random(rows) < 0.30, 0.0, generator.normal(30.0, 8.0, rows)
+            ),
+            "Insulin": np.where(generator.random(rows) < 0.40, 0.0, insulin),
+            "BMI": generator.normal(32.0, 7.0, rows),
+            "DiabetesPedigreeFunction": generator.gamma(2.0, 0.25, rows),
+            "Age": generator.integers(21, 70, rows).astype(float),
+        }
+    )
+    frame["Outcome"] = (
+        frame["Glucose"] + frame["Insulin"] * 0.15 + generator.normal(scale=25.0, size=rows) > 145.0
+    ).astype(int)
+    # Validation rejects negative measurements outright, so clip before use.
+    frame = frame.clip(lower=0.0).astype(dict.fromkeys(FEATURE_COLUMNS, "float64"))
+    return frame.astype({TARGET_COLUMN: "int64"})
+
+
+@pytest.fixture
+def modelling_split(modelling_frame: pd.DataFrame) -> DatasetSplit:
+    """Return a fixed stratified split of :func:`modelling_frame`."""
+    from cronical.data.preprocessing import split_dataset
+
+    return split_dataset(modelling_frame, test_size=0.25, random_state=42)
